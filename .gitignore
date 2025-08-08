@@ -1,2 +1,62 @@
-/.venv
 /TriageHasher.code-workspace
+
+# Byte-compiled Python files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# VS Code settings (ignore everything except recommended files)
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.vscode/launch.json
+
+# Build and distribution artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# Package manager files
+Pipfile
+Pipfile.lock
+poetry.lock
+pyproject.toml  # Only ignore if not using Poetry/PEP-517
+
+# Testing and coverage
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# Environments
+.env
+.venv
+/.venv
+
+# OS-specific files
+.DS_Store           # macOS
+Thumbs.db           # Windows
+desktop.ini         # Windows
+
+# Editor temporary files
+*.swp
+*.swo
+*~
+~$*
+
+# Output files
+*.csv
+TriageHasherLog*.txt
