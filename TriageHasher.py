@@ -243,6 +243,8 @@ def main():
 ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝                                              
         DFIR Forensic Hashing Tool
 ==================V{VERSION}=====================
+https://github.com/FlipForensics/TriageHasher
+Note: This tool should always be ran with admin rights. 
           ''')
 
     # Configure argument parser with detailed help

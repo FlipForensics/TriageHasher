@@ -25,6 +25,7 @@ dist/
 *.egg-info/
 *.egg
 pip-wheel-metadata/
+TriageHasher.spec
 
 # Package manager files
 Pipfile
@@ -60,3 +61,4 @@ desktop.ini         # Windows
 # Output files
 *.csv
 TriageHasherLog*.txt
+
