@@ -477,7 +477,7 @@ Generates CSV output with file metadata and hashes.''',
     total_seconds = end_time - start_time
     runtime_str = format_runtime(total_seconds)
 
-    # Final report
+    # Final report 
     logger.info(
         f"Processing completed in {runtime_str}. "
         f"Files: {processed_files}, "
