@@ -38,7 +38,12 @@ if os.name == 'nt':
 
 def datetime_to_filetime(dt):
     """Convert Python datetime to Windows FILETIME structure"""
-    timestamp = dt.timestamp()
+    if isinstance(dt, datetime):
+        # Already a datetime object
+        timestamp = dt.timestamp()
+    else:
+        # Assume it's a float timestamp
+        timestamp = dt
     ft = FILETIME()
     dt_64 = int((timestamp * 10000000) + 116444736000000000)
     ft.dwHighDateTime = dt_64 >> 32
@@ -175,8 +180,7 @@ def restore_timestamps(file_path, original_atime, original_mtime, logger,timefor
         logger.warning(f"Error restoring timestamps for {file_path}: {str(e)}")
         return 'restoration_error'
 
-def compute_hashes(file_path, algorithms, chunk_size, original_stat_atime,  original_stat_mtime,
-                        original_stat_ctime, logger):
+def compute_hashes(file_path, algorithms, chunk_size, stat_result, logger):
     hashers = {alg: hashlib.new(alg) for alg in algorithms}
     restoration_success = False
     
@@ -186,7 +190,7 @@ def compute_hashes(file_path, algorithms, chunk_size, original_stat_atime,  orig
             # Create low-level file handle with maximum access
             handle = win32file.CreateFile(
                 file_path,
-                win32file.GENERIC_READ | win32con.FILE_WRITE_ATTRIBUTES,
+                win32file.GENERIC_READ | 0x100,  # FILE_WRITE_ATTRIBUTES = 0x100 (256)
                 win32file.FILE_SHARE_READ,
                 None,
                 win32file.OPEN_EXISTING,
@@ -205,9 +209,9 @@ def compute_hashes(file_path, algorithms, chunk_size, original_stat_atime,  orig
                 position += len(data)
             
             # Restore timestamps while file is open
-            create_time = datetime_to_filetime(original_stat_ctime)
-            access_time = datetime_to_filetime(original_stat_atime)
-            write_time = datetime_to_filetime(original_stat_mtime)
+            create_time = datetime_to_filetime(stat_result.st_ctime)
+            access_time = datetime_to_filetime(stat_result.st_atime)
+            write_time = datetime_to_filetime(stat_result.st_mtime)
             
             if not SetFileTime(handle.handle, ctypes.byref(create_time), 
                               ctypes.byref(access_time), ctypes.byref(write_time)):
@@ -523,9 +527,7 @@ Generates CSV output with file metadata and hashes.''',
                         file_path,
                         hash_algorithms,
                         chunk_size,
-                        original_stat_atime,
-                        original_stat_mtime,
-                        original_stat_ctime,
+                        stat_result,
                         logger
                     )
                   
