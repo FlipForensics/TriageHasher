@@ -18,6 +18,32 @@ import configparser
 from datetime import datetime, timezone
 import socket
 import time
+import ctypes
+from ctypes.wintypes import HANDLE, DWORD, LPCWSTR, BOOL, FILETIME
+import win32file
+import win32con
+
+
+
+# Windows-specific functions for precise timestamp handling
+if os.name == 'nt':
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    CreateFileW = kernel32.CreateFileW
+    CreateFileW.argtypes = [LPCWSTR, DWORD, DWORD, ctypes.c_void_p, DWORD, DWORD, HANDLE]
+    CreateFileW.restype = HANDLE
+    SetFileTime = kernel32.SetFileTime
+    SetFileTime.argtypes = [HANDLE, ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME)]
+    SetFileTime.restype = BOOL
+    CloseHandle = kernel32.CloseHandle
+
+def datetime_to_filetime(dt):
+    """Convert Python datetime to Windows FILETIME structure"""
+    timestamp = dt.timestamp()
+    ft = FILETIME()
+    dt_64 = int((timestamp * 10000000) + 116444736000000000)
+    ft.dwHighDateTime = dt_64 >> 32
+    ft.dwLowDateTime = dt_64 & 0xFFFFFFFF
+    return ft
 
 def format_runtime(seconds):
     """Format runtime into human-readable string"""
@@ -114,27 +140,31 @@ def format_size(size_bytes):
         
     return f"{size:.2f}{units[unit_idx]}"
 
-def restore_timestamps(file_path, original_atime, original_mtime, logger):
+def restore_timestamps(file_path, original_atime, original_mtime, logger,timeformat):
     """
     Restore original timestamps and return error category if failed.
     Returns: 'success', 'permission_error', or 'restoration_error'
     """
     try:
+        #current_stat = os.stat(file_path)
+        #logger.info(f"""Trying to restore timestamps for file: {file_path}, access time: {format_timestamp(original_atime,timeformat)} and modified time: {format_timestamp(original_mtime,timeformat)}. The current stats are access time: {format_timestamp(current_stat.st_atime,timeformat)} and modified time: {format_timestamp(current_stat.st_mtime,timeformat)}""")     
+        
         # Attempt to restore timestamps
         os.utime(file_path, (original_atime, original_mtime))
-        
+        #file_path.stat().st_atime = original_atime
         # Verify restoration was successful
-        new_stat = os.stat(file_path)
-        timestamp_diff = abs(new_stat.st_atime - original_atime)
+        #new_stat = os.stat(file_path)
+        #timestamp_diff = abs(new_stat.st_atime - original_atime)
         
-        # Check if restoration failed (more than 1-second difference)
-        if timestamp_diff > 1.0:
-            logger.warning(
-                f"Access time restoration failed for {file_path}: "
-                f"Difference: {timestamp_diff:.2f} seconds"
-            )
-            return 'restoration_error'
-            
+        ## Check if restoration failed (more than 1-second difference)
+        #if timestamp_diff > 1.0:
+        #    logger.warning(
+        #        f"Access time restoration failed for {file_path}: "
+        #        f"Difference: {timestamp_diff:.2f} seconds"
+        #    )
+        #    return 'restoration_error'
+        #logger.info(f"""After restoration the timestamps for file: {file_path} are, access time: {format_timestamp(new_stat.st_atime,timeformat)} and modified time: {format_timestamp(new_stat.st_mtime,timeformat)}.""")     
+ 
         return 'success'
     except PermissionError:
         # Permission errors are expected for protected files
@@ -145,31 +175,57 @@ def restore_timestamps(file_path, original_atime, original_mtime, logger):
         logger.warning(f"Error restoring timestamps for {file_path}: {str(e)}")
         return 'restoration_error'
 
-def compute_hashes(file_path, algorithms, chunk_size, original_stat, logger):
-    """
-    Compute file hashes while preserving original access time.
-    Returns hashes and a flag indicating if timestamps were preserved.
-    """
+def compute_hashes(file_path, algorithms, chunk_size, original_stat_atime,  original_stat_mtime,
+                        original_stat_ctime, logger):
     hashers = {alg: hashlib.new(alg) for alg in algorithms}
     restoration_success = False
     
     try:
-        # Open file with minimal access to reduce timestamp changes
-        with open(file_path, 'rb', buffering=0) as f:
-            logger.debug(f"Trying to hash file: {file_path}")
-
-            # Read and hash in chunks
-            while chunk := f.read(chunk_size):
-                for hasher in hashers.values():
-                    hasher.update(chunk)
+        # Windows-specific low-level file handling
+        if os.name == 'nt':
+            # Create low-level file handle with maximum access
+            handle = win32file.CreateFile(
+                file_path,
+                win32file.GENERIC_READ | win32con.FILE_WRITE_ATTRIBUTES,
+                win32file.FILE_SHARE_READ,
+                None,
+                win32file.OPEN_EXISTING,
+                win32file.FILE_FLAG_BACKUP_SEMANTICS,
+                None
+            )
             
-            # Attempt to restore timestamps while file is still open
-            try:
+            # Read file in chunks
+            position = 0
+            while True:
+                hr, data = win32file.ReadFile(handle, chunk_size)
+                if not data:
+                    break
+                for hasher in hashers.values():
+                    hasher.update(data)
+                position += len(data)
+            
+            # Restore timestamps while file is open
+            create_time = datetime_to_filetime(original_stat_ctime)
+            access_time = datetime_to_filetime(original_stat_atime)
+            write_time = datetime_to_filetime(original_stat_mtime)
+            
+            if not SetFileTime(handle.handle, ctypes.byref(create_time), 
+                              ctypes.byref(access_time), ctypes.byref(write_time)):
+                logger.error(f"SetFileTime failed for {file_path} (error {ctypes.get_last_error()})")
+            else:
+                restoration_success = True
+            
+            win32file.CloseHandle(handle)
+        else:
+            # POSIX systems
+            with open(file_path, 'rb', buffering=0) as f:
+                while chunk := f.read(chunk_size):
+                    for hasher in hashers.values():
+                        hasher.update(chunk)
+                
+                # Restore timestamps using file descriptor
                 os.futimes(f.fileno(), (original_stat.st_atime, original_stat.st_mtime))
                 restoration_success = True
-            except (AttributeError, OSError):
-                # Fallback to path-based restoration
-                pass
     
     except Exception as e:
         if "[Errno 22]" in str(e): 
@@ -179,7 +235,36 @@ def compute_hashes(file_path, algorithms, chunk_size, original_stat, logger):
             logger.error(f"Hashing failed for {file_path}: {str(e)}")
         return None, False, 'error'
     
-    return {alg: hasher.hexdigest() for alg, hasher in hashers.items()}, restoration_success, ''
+    error_code = 'success'
+    if restoration_success == False:
+        error_code = 'restoration_error'
+
+    return {alg: hasher.hexdigest() for alg, hasher in hashers.items()}, restoration_success, error_code
+
+# """ def batch_restore_timestamps(restore_queue, logger,timeformat):
+#     """Restore original timestamps for all files in the queue"""
+#     logger.info(f"Starting timestamp restoration for {len(restore_queue)} files")
+#     restoration_errors = 0
+#     permission_errors = 0
+    
+#     for file_path, original_atime, original_mtime in restore_queue:
+#         try:
+#             current_stat = os.stat(file_path)
+#             logger.debug(f"""Trying to restore timestamps for file: {file_path}, access time: {format_timestamp(original_atime,timeformat)} and modified time: {format_timestamp(original_mtime,timeformat)}. The current stats are access time: {format_timestamp(current_stat.st_atime,timeformat)} and modified time: {format_timestamp(current_stat.st_mtime,timeformat)}""")     
+#             os.utime(file_path, (original_atime, original_mtime))
+#             logger.debug(f"Restored timestamps for {file_path}")
+#             time.sleep(60)
+#         except PermissionError:
+#             permission_errors += 1
+#             logger.debug(f"Permission error restoring {file_path}")
+#         except Exception as e:
+#             restoration_errors += 1
+#             logger.warning(f"Error restoring {file_path}: {str(e)}")
+    
+#     logger.info(f"Timestamp restoration complete. Success: {len(restore_queue) - restoration_errors - permission_errors}, "
+#                 f"Permission Errors: {permission_errors}, Restoration Errors: {restoration_errors}")
+#     return restoration_errors, permission_errors """
+
 def setup_logging(log_file, file_level, console_level):
     """
     Configure dual logging system (file + console)
@@ -345,7 +430,7 @@ Generates CSV output with file metadata and hashes.''',
 
     # Initialize logging system
     logger = setup_logging(log_file, log_file_level, log_console_level)
-    logger.info("TriageHasher started")
+    logger.info(f"TriageHasher V{VERSION} started")
     logger.info(f"Using configuration: {args.config_file}")
     logger.info(f"Output directory: {output_dir}")
     
@@ -377,6 +462,8 @@ Generates CSV output with file metadata and hashes.''',
     restoration_errors = 0
     protected_file_skips = 0
 
+    #restore_queue = []
+
     try:
         with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter=csv_delimiter)
@@ -388,14 +475,7 @@ Generates CSV output with file metadata and hashes.''',
                 
                 # Expand pattern with recursive glob
                 for file_path in glob.glob(pattern, recursive=True):
-                    
-                    try:
-                        # Get file metadata
-                        original_stat = os.stat(file_path)
-                        file_size = os.path.getsize(file_path)
-                    except Exception as e:
-                        logger.debug(f"Metadata access failed: {file_path} - {str(e)}")
-
+                    basename = str(os.path.basename(file_path))
                     # Skip directories
                     if not os.path.isfile(file_path):
                         continue
@@ -405,6 +485,23 @@ Generates CSV output with file metadata and hashes.''',
                     if file_ext not in extensions:
                         logger.debug(f"Skipping non-target extension: {file_path}")
                         continue
+                    
+                    try: 
+                        stat_result = os.stat(file_path)
+                        original_stat_atime = stat_result.st_atime
+                        original_stat_mtime = stat_result.st_mtime
+                        original_stat_ctime = stat_result.st_ctime
+                        file_size = stat_result.st_size
+                        print(f"original timestamp: {format_timestamp(original_stat_atime,time_format)} of file: {file_path}")
+                    except Exception as e:
+                        logger.debug(f"Metadata access failed: {file_path} - {str(e)}")    
+                    try:
+                        # Get file metadata
+                        # original_stat = os.stat(file_path)
+                        # file_size = os.path.getsize(file_path)
+                        file_size = os.path.getsize(file_path)
+                    except Exception as e:
+                        logger.debug(f"Metadata access failed: {file_path} - {str(e)}")
 
                     # Skip files exceeding size limit
                     if file_size > max_file_size:
@@ -414,39 +511,38 @@ Generates CSV output with file metadata and hashes.''',
                     # Prepare metadata dictionary
                     metadata = {
                         'full_path': file_path,
-                        'filename': os.path.basename(file_path),
-                        'creation_time_utc': format_timestamp(original_stat.st_ctime, time_format),
-                        'modification_time_utc': format_timestamp(original_stat.st_mtime, time_format),
-                        'access_time_utc': format_timestamp(original_stat.st_atime, time_format),
+                        'filename': basename,
+                        'creation_time_utc': format_timestamp(original_stat_ctime, time_format),
+                        'modification_time_utc': format_timestamp(original_stat_mtime, time_format),
+                        'access_time_utc': format_timestamp(original_stat_atime, time_format),
                         'size': format_size(file_size)
                     }
                     
                     # Compute hashes and attempt in-place timestamp preservation
-                    hashes, in_place_success, error_string = compute_hashes(
+                    hashes, restoration_success, error_string = compute_hashes(
                         file_path,
                         hash_algorithms,
                         chunk_size,
-                        original_stat,
+                        original_stat_atime,
+                        original_stat_mtime,
+                        original_stat_ctime,
                         logger
                     )
-                                        
-                    # Fallback to external restoration if needed
-                    if not in_place_success:
-                        restoration_result = restore_timestamps(
-                            file_path,
-                            original_stat.st_atime,
-                            original_stat.st_mtime,
-                            logger
-                        )
-                        if restoration_result == 'restoration_error':
-                            restoration_errors += 1
-
-                    if in_place_success or restoration_result == 'success':
-                        # Verify restoration
-                        new_stat = os.stat(file_path)
-                        if abs(new_stat.st_atime - original_stat.st_atime) > 0.01:  # 10ms threshold
-                            logger.warning(f"Timestamp drift detected: {file_path} "
-                                        f"({new_stat.st_atime - original_stat.st_atime:.6f}s)")
+                  
+          
+                    #in_place_success = False    
+                    #restoration_result = ''    
+                    ## Fallback to external restoration if needed
+                    #if not in_place_success:
+                    #    restoration_result = restore_timestamps(
+                    #        file_path,
+                    #        original_stat_atime,
+                    #        original_stat_mtime,
+                    #        logger,
+                    #        time_format
+                    #    )
+                    #    if restoration_result == 'restoration_error':
+                    #        restoration_errors += 1                   
 
                     # Track different error types
                     if error_string == 'error':
@@ -455,12 +551,14 @@ Generates CSV output with file metadata and hashes.''',
                     elif error_string == 'protected_file':
                         protected_file_skips +=1
                         continue
-                    elif restoration_result == 'restoration_error':
+                    elif error_string == 'restoration_error':
                         restoration_errors += 1
-                    elif restoration_result == 'permission_error':
-                        # Only log at debug level for protected files
-                        logger.debug(f"Permission error restoring timestamps for {file_path}")
+                    #elif restoration_result == 'permission_error':
+                    #    # Only log at debug level for protected files
+                    #    logger.debug(f"Permission error restoring timestamps for {file_path}")
 
+                    # Add to restoration queue
+                    # restore_queue.append((file_path, original_stat_atime, original_stat_mtime))
 
                     # Combine metadata and hashes for CSV row
                     row = {**metadata, **hashes}
@@ -475,6 +573,15 @@ Generates CSV output with file metadata and hashes.''',
         logger.error(f"Fatal error: {str(e)}", exc_info=True)
         sys.exit(1)
     
+    # try: 
+    #     logger.info(f"All files processed. Waiting 10 seconds before timestamp restoration...")
+    #     time.sleep(60)
+            
+    #     restoration_errors, permission_errors = batch_restore_timestamps(restore_queue, logger,time_format)
+    # except Exception as e:
+    #     logger.error(f"Fatal error: {str(e)}", exc_info=True)
+    #     sys.exit(1)
+
     end_time = time.time()
     total_seconds = end_time - start_time
     runtime_str = format_runtime(total_seconds)
