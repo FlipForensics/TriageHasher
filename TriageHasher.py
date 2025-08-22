@@ -217,6 +217,8 @@ def setup_logging(log_file, file_level, console_level):
     LOGGER = logger
 
 def main():
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
     #print the logo
     print(f'''
 ████████╗██████╗ ██╗ █████╗  ██████╗ ███████╗   
