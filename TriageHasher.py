@@ -275,10 +275,10 @@ Generates CSV output with file metadata and hashes.''',
     
     parser.add_argument('-o', '--output',
                         dest='output_location',
-                        default=os.getcwd(),
+                        default=os.path.abspath(os.path.join(os.getcwd(), 'Output/')),
                         help='Output directory (default: current working directory)',
                         metavar='DIR')
-    
+
     args = parser.parse_args()
     
     # Record start time immediately after argument parsing
@@ -335,14 +335,16 @@ Generates CSV output with file metadata and hashes.''',
     
     # Create output directory if needed
     output_dir = args.output_location
+    logfile_loation = os.path.join(args.output_location,'Logs/')
     os.makedirs(output_dir, exist_ok=True)
-    
+    os.makedirs(logfile_loation, exist_ok=True)
+
      # Generate dynamic filenames
     csv_filename = f"FileHashes_{computer_name}_{start_time_utc_str}.csv"
     log_filename = f"TriageHasherLog_{computer_name}_{start_time_utc_str}.txt"
     
     csv_path = os.path.join(args.output_location, csv_filename)
-    log_file = os.path.join(args.output_location, log_filename)
+    log_file = os.path.join(logfile_loation, log_filename)
 
 
     # Initialize logging system
