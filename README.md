@@ -2,7 +2,7 @@
 # TriageHasher
 [![GPLv3 License](https://img.shields.io/badge/License-GPL%20v3-yellow.svg)](https://opensource.org/licenses/)
 
-TriageHasher is a command-line tool for fast, forensic-friendly hashing of files on Windows, Linux and macOS.
+TriageHasher is a command-line tool for fast and flexible hashing of files on Windows, Linux and macOS.
 It walks the paths you specify, filters by extension/size, computes one or more cryptographic hashes, and writes the results to a CSV file together with basic file-system metadata.
 
 ## Goal 
