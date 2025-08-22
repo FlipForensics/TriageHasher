@@ -18,6 +18,7 @@ import configparser
 from datetime import datetime, timezone
 import socket
 import time
+from contextlib import contextmanager
 
 
 # These will be set later. 
@@ -119,6 +120,31 @@ def format_size(size_bytes):
         
     return f"{size:.2f}{units[unit_idx]}"
 
+@contextmanager
+def open_noatime(path: str, chunk_size: int):
+    """
+    Yield a file object opened read-only. On Linux we ask the kernel
+    not to update atime (O_NOATIME). On platforms that lack the flag
+    we fall back to a normal open; at the call-site we will restore
+    atime if it changed.
+    """
+    if os.name == 'posix':
+        flags = os.O_RDONLY
+        try:
+            flags |= os.O_NOATIME          # Linux ≥2.6.8, same uid needed
+        except AttributeError:
+            pass                           # BSD / macOS – no such flag
+        fd = os.open(path, flags)
+        try:
+            with os.fdopen(fd, 'rb', buffering=chunk_size) as fh:
+                yield fh
+        finally:
+            os.close(fd)
+    else:
+        # Non-POSIX (e.g. Windows) – fall back gracefully
+        with open(path, 'rb', buffering=chunk_size) as fh:
+            yield fh
+
 def compute_hashes(file_path, algorithms, chunk_size):
     """
     Compute file hashes. 
@@ -127,7 +153,7 @@ def compute_hashes(file_path, algorithms, chunk_size):
     hashers = {alg: hashlib.new(alg) for alg in algorithms}
     
     try:
-        with open(file_path, 'rb', buffering=0) as f:
+        with open_noatime(file_path, chunk_size) as f:
             LOGGER.debug(f"Trying to hash file: {file_path}")
 
             # Read and hash in chunks
@@ -135,13 +161,22 @@ def compute_hashes(file_path, algorithms, chunk_size):
                 for hasher in hashers.values():
                     hasher.update(chunk)
     except Exception as e:
-        if "[Errno 22]" in str(e): 
+        if e.errno == 13 or e.errno == 22:  
             LOGGER.warning(f"Failed to hash a protected file: {file_path}")
             return None, 'protected_file'
         else: 
             LOGGER.error(f"Hashing failed for {file_path}: {str(e)}")
         return None, 'error'
     
+    # Fallback: if kernel still updated atime, restore it
+    if os.name == 'posix':
+        try:
+            new_stat = os.stat(file_path)
+            if new_stat.st_atime != orig_stat.st_atime:
+                os.utime(file_path, (orig_stat.st_atime, orig_stat.st_mtime))
+        except PermissionError:
+            LOGGER.debug(f"Could not restore atime for {file_path}")
+  
     return {alg: hasher.hexdigest() for alg, hasher in hashers.items()}, ''
 
 def setup_logging(log_file, file_level, console_level):
@@ -372,7 +407,9 @@ Generates CSV output with file metadata and hashes.''',
                         original_stat_ctime  = stat.st_ctime
                         file_size  = stat.st_size                   
                     except Exception as e:
-                        LOGGER.debug(f"Metadata access failed: {file_path} - {str(e)}")    
+                        LOGGER.error(f"Metadata access failed: {file_path} - {str(e)}") 
+                        hashing_errors += 1 
+                        continue   
 
                     # Skip files exceeding size limit
                     if file_size > max_file_size:
@@ -401,6 +438,7 @@ Generates CSV output with file metadata and hashes.''',
                         continue
                     elif error_string == 'protected_file':
                         protected_file_skips +=1
+                        continue
 
                     # Combine metadata and hashes for CSV row
                     row = {**metadata, **hashes}
