@@ -1,0 +1,4 @@
+C:\Windows\System32\**
+C:\Windows\Temp\**
+C:\Users\**
+C:\ProgramData\**
