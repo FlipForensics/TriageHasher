@@ -133,13 +133,12 @@ def open_noatime(path: str, chunk_size: int):
         try:
             flags |= os.O_NOATIME          # Linux ≥2.6.8, same uid needed
         except AttributeError:
-            pass                           # BSD / macOS – no such flag
+            with open(path, 'rb', buffering=chunk_size) as fh:
+                yield fh                           # BSD / macOS – no such flag, just open the file normally. 
         fd = os.open(path, flags)
-        try:
-            with os.fdopen(fd, 'rb', buffering=chunk_size) as fh:
-                yield fh
-        finally:
-            os.close(fd)
+        with os.fdopen(fd, 'rb', buffering=chunk_size) as fh:
+            yield fh
+
     else:
         # Non-POSIX (e.g. Windows) – fall back gracefully
         with open(path, 'rb', buffering=chunk_size) as fh:
@@ -167,16 +166,7 @@ def compute_hashes(file_path, algorithms, chunk_size):
         else: 
             LOGGER.error(f"Hashing failed for {file_path}: {str(e)}")
         return None, 'error'
-    
-    # Fallback: if kernel still updated atime, restore it
-    if os.name == 'posix':
-        try:
-            new_stat = os.stat(file_path)
-            if new_stat.st_atime != orig_stat.st_atime:
-                os.utime(file_path, (orig_stat.st_atime, orig_stat.st_mtime))
-        except PermissionError:
-            LOGGER.debug(f"Could not restore atime for {file_path}")
-  
+ 
     return {alg: hasher.hexdigest() for alg, hasher in hashers.items()}, ''
 
 def setup_logging(log_file, file_level, console_level):
