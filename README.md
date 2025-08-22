@@ -100,7 +100,7 @@ chunk_size = 65536
 
 ```
 ## KAPE integration
-This tool can be integrated with KAPE by using the attached module. Add TriageHasher.exe, config file and locations file to KAPE's bin folder and add the module file to the Module folder. Now you can use TriageHasher in combination with KAPE. 
+This tool can be integrated with KAPE by using the attached module. Add a folder named 'TriageHasher' containing TriageHasher.exe, the config file and locations file to KAPE's bin folder ('\Modules\bin') and add the module file to the Module folder ('Modules\Apps\GitHub'). Now you can use TriageHasher in combination with KAPE. 
 
 ## Forensic notes
 Windows: Since Vista the default NTFS behaviour is to defer atime updates, so normal reads leave metadata untouched.
